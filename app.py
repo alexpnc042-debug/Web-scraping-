@@ -1,106 +1,108 @@
-from flask import Flask, render_template_string, send_file, redirect, url_for, session
+from flask import Flask, render_template_string, request, send_file, redirect, url_for
 import requests
 from bs4 import BeautifulSoup
 import pandas as pd
-import io
+import os
 
 app = Flask(__name__)
-app.secret_key = "demo_secret"
 
+DATA_FILE = "books.xlsx"
+
+# ------------------------
+# SCRAPER
+# ------------------------
+def scrape_books():
+    url = "https://books.toscrape.com/"
+    response = requests.get(url)
+    soup = BeautifulSoup(response.text, "lxml")
+
+    books = []
+
+    for book in soup.select(".product_pod"):
+        title = book.h3.a["title"]
+        price = book.select_one(".price_color").text
+        availability = book.select_one(".availability").text.strip()
+
+        books.append([title, price, availability])
+
+    df = pd.DataFrame(books, columns=["Title", "Price", "Availability"])
+    df.to_excel(DATA_FILE, index=False)
+
+    return df
+
+
+# ------------------------
+# HTML TEMPLATE
+# ------------------------
 HTML = """
 <!DOCTYPE html>
 <html>
 <head>
-<title>Scraper Dashboard</title>
-
+<title>Scraper Demo</title>
 <style>
-
 body {
-    background: linear-gradient(135deg, #0f172a, #020617);
-    font-family: Arial, sans-serif;
+    background: #0f172a;
+    color: white;
+    font-family: Arial;
     text-align: center;
-    margin: 0;
-    padding: 20px;
-}
-
-h1 {
-    color: #22c55e;
-    text-shadow: 0 0 8px rgba(34,197,94,0.6);
 }
 
 button {
-    background: transparent;
-    color: #22c55e;
-    border: 2px solid #22c55e;
-    padding: 12px 18px;
-    font-size: 15px;
+    padding: 12px 20px;
+    border-radius: 10px;
+    border: none;
     cursor: pointer;
     margin: 10px;
-    border-radius: 12px;
+    font-size: 16px;
 }
 
-button:hover {
+.scrap {
     background: #22c55e;
     color: black;
 }
 
-.table-container {
+.download {
+    background: #38bdf8;
+    color: black;
+}
+
+.table-box {
     background: white;
-    margin: 25px auto;
-    padding: 15px;
-    width: 95%;
-    border-radius: 18px;
-    box-shadow: 0 10px 30px rgba(0,0,0,0.5);
+    color: black;
+    border-radius: 20px;
+    padding: 20px;
+    margin: 20px auto;
+    width: 90%;
     overflow-x: auto;
 }
 
 table {
-    border-collapse: collapse;
     width: 100%;
+    border-collapse: collapse;
 }
 
-th {
-    background: #f3f4f6;
-    color: black;
+th, td {
     padding: 10px;
+    border-bottom: 1px solid #ddd;
 }
-
-td {
-    color: black;
-    padding: 8px;
-}
-
-tr:nth-child(even) {
-    background: #f9fafb;
-}
-
 </style>
 </head>
 
 <body>
 
-<h1>⚡ Scraper Dashboard ⚡</h1>
+<h1>Web Scraping Demo</h1>
 
-<a href="/scrape"><button>▶ Ejecutar Scraping</button></a>
-<a href="/download"><button>⬇ Descargar Excel</button></a>
+<form method="post">
+<button class="scrap">Scrapear</button>
+</form>
 
-{% if books %}
-<div class="table-container">
-<table>
-<tr>
-<th>Título</th>
-<th>Precio</th>
-<th>Disponibilidad</th>
-</tr>
+{% if table %}
+<a href="/download">
+<button class="download">Descargar Excel</button>
+</a>
 
-{% for b in books %}
-<tr>
-<td>{{b.title}}</td>
-<td>{{b.price}}</td>
-<td>{{b.availability}}</td>
-</tr>
-{% endfor %}
-</table>
+<div class="table-box">
+{{ table|safe }}
 </div>
 {% endif %}
 
@@ -108,52 +110,30 @@ tr:nth-child(even) {
 </html>
 """
 
-def run_scraper():
 
-    url = "https://books.toscrape.com/"
-    headers = {"User-Agent": "Mozilla/5.0"}
-
-    r = requests.get(url, headers=headers)
-    soup = BeautifulSoup(r.text, "html.parser")
-
-    books = []
-
-    for book in soup.find_all("article", class_="product_pod"):
-        books.append({
-            "title": book.h3.a["title"],
-            "price": book.find("p", class_="price_color").text.replace("Â", ""),
-            "availability": book.find("p", class_="instock availability").text.strip()
-        })
-
-    return books
-
-
-@app.route("/")
+# ------------------------
+# ROUTES
+# ------------------------
+@app.route("/", methods=["GET", "POST"])
 def home():
-    books = session.pop("books", None)
-    return render_template_string(HTML, books=books)
+    if request.method == "POST":
+        df = scrape_books()
+        table = df.to_html(classes="table", index=False)
+        return render_template_string(HTML, table=table)
 
-
-@app.route("/scrape")
-def scrape():
-    session["books"] = run_scraper()
-    return redirect(url_for("home"))
+    return render_template_string(HTML, table=None)
 
 
 @app.route("/download")
 def download():
-
-    books = run_scraper()
-    df = pd.DataFrame(books)
-
-    output = io.BytesIO()
-    df.to_excel(output, index=False)
-    output.seek(0)
-
-    return send_file(output,
-                     download_name="scraping_demo.xlsx",
-                     as_attachment=True)
+    if os.path.exists(DATA_FILE):
+        return send_file(DATA_FILE, as_attachment=True)
+    return redirect(url_for("home"))
 
 
+# ------------------------
+# SERVER (Render compatible)
+# ------------------------
 if __name__ == "__main__":
-    app.run(host="127.0.0.1", port=5000)
+    port = int(os.environ.get("PORT", 10000))
+    app.run(host="0.0.0.0", port=port)
